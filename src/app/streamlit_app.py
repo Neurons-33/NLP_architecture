@@ -4,10 +4,10 @@ import os
 import sys
 import re
 import random
-import datetime
 
 import streamlit as st
 from dotenv import load_dotenv
+
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -17,6 +17,9 @@ from retrieval.retriever import (
     build_retrieved_context,
 )
 from core.report_generator import generate_report
+import core.config
+from core.cloudinary_uploader import upload_pil_image
+from core.supabase_client import insert_card, get_latest_cards, get_cards_count
 
 
 # =========================
@@ -241,10 +244,8 @@ def render_knowledge_card(title, text, sources, background_path=None):
 
     buffer = io.BytesIO()
     final_output.save(buffer, format="PNG")
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    final_output.save(os.path.join(CARDS_DIR, f"card_{timestamp}.png"))
     buffer.seek(0)
-    return buffer
+    return final_output, buffer
 
 @st.cache_resource
 def get_retriever(): 
@@ -258,6 +259,10 @@ def get_retriever():
 if "last_result" not in st.session_state: st.session_state.last_result = ""
 if "last_sources" not in st.session_state: st.session_state.last_sources = []
 if "last_png" not in st.session_state: st.session_state.last_png = None
+if "last_image_url" not in st.session_state: st.session_state.last_image_url = ""
+if "card_history" not in st.session_state: st.session_state.card_history = []
+if "last_public_id" not in st.session_state: st.session_state.last_public_id = ""
+
 
 # =========================
 # Streamlit Page Config
@@ -270,19 +275,45 @@ st.title("ML Concept Engine")
 # =========================
 retriever_state = get_retriever()
 question = st.text_input("Ask ML questions and generate visual explanation cards")
+
 if st.button("Enter") and question:
     try:
         with st.spinner("思考與檢索中..."):
             results = search_chunks(question, retriever_state, top_k=3)
             context = build_retrieved_context(results)
             result = generate_report(context=context, question=question)
-            
+
             source_list = [os.path.basename(r["source"]) for r in results]
-            png_buffer = render_knowledge_card("", result, source_list if source_list else ["Unknown"], None)
-            
+
+            card_image, png_buffer = render_knowledge_card(
+                "",
+                result,
+                source_list if source_list else ["Unknown"],
+                None
+            )
+
+            upload_result = upload_pil_image(card_image)
+            image_url = upload_result["secure_url"]
+            public_id = upload_result["public_id"]
+
             st.session_state.last_result = result
-            st.session_state.last_sources = [f"- **{os.path.basename(r['source'])}** — {r['title']}" for r in results]
+            st.session_state.last_sources = [
+                f"- **{os.path.basename(r['source'])}** — {r['title']}"
+                for r in results
+            ]
             st.session_state.last_png = png_buffer.getvalue()
+            st.session_state.last_image_url = image_url
+            st.session_state.last_public_id = public_id
+            insert_card(
+                question=question,
+                answer=result,
+                image_url=image_url,
+                public_id=public_id
+            )
+            # join card history
+            st.session_state.card_history.insert(0, image_url)
+            st.session_state.card_history = st.session_state.card_history[:5]
+
     except Exception as e:
         st.error(f"Error: {e}")
 
@@ -320,21 +351,43 @@ except Exception as e:
 
 st.markdown("---") 
 
+
 # 顯示目前的結果
 if st.session_state.last_result:
     st.markdown(st.session_state.last_result)
     st.markdown("---")
-    for line in st.session_state.last_sources: st.markdown(line)
+
+    for line in st.session_state.last_sources:
+        st.markdown(line)
+
     if st.session_state.last_png:
-        st.download_button("Download card", st.session_state.last_png, "knowledge_card.png", "image/png")
+        st.download_button(
+            "Download card",
+            st.session_state.last_png,
+            "knowledge_card.png",
+            "image/png"
+        )
 
 # 歷史卡片區
 st.subheader("最新生成卡片")
-if os.path.exists(CARDS_DIR):
-    all_files = sorted([f for f in os.listdir(CARDS_DIR) if f.endswith(".png")], 
-                       key=lambda x: os.path.getmtime(os.path.join(CARDS_DIR, x)), reverse=True)
-    if all_files:
+
+try:
+    latest_cards_response = get_latest_cards(limit=5)
+    latest_cards = latest_cards_response.data if latest_cards_response.data else []
+
+    if latest_cards:
         cols = st.columns(5)
-        for i, f in enumerate(all_files[:5]):
-            with cols[i]: st.image(os.path.join(CARDS_DIR, f), use_container_width=True)
-    st.markdown(f"**累計生成卡片：{len(all_files)}**")
+
+        for i, card in enumerate(latest_cards):
+            with cols[i]:
+                st.image(card["image_url"], width=220)
+
+        count_response = get_cards_count()
+        total_count = count_response.count if count_response.count is not None else len(latest_cards)
+
+        st.markdown(f"**累計生成卡片：{total_count}**")
+    else:
+        st.info("目前尚未生成卡片。")
+
+except Exception as e:
+    st.warning(f"無法讀取歷史卡片: {e}")

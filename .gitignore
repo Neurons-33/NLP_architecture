@@ -15,8 +15,9 @@ venv/
 # vscode
 .vscode/
 
-# streamlit
-.streamlit/
+# streamlit secrets
+.streamlit/secrets.toml
 
 # system
 .DS_Store
+
