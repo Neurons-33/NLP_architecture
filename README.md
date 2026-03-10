@@ -157,32 +157,7 @@ Return Result to Frontend
 # 專案結構
 
 
-NLP_architecture/
-├── README.md
-├── requirements.txt
-├── .gitignore
-├── assets/
-│   ├── bg.jpg
-│   ├── bg2.jpg
-│   ├── bg3.jpg
-│   └── fonts/
-│       ├── NotoSansCJK-Regular.ttc
-│       └── NotoSansCJK-Bold.ttc
-├── knowledge/
-│   └── ml/
-│       └── *.md
-└── src/
-    ├── app/
-    │   └── streamlit_app.py
-    ├── core/
-    │   ├── config.py
-    │   ├── report_generator.py
-    │   ├── context_builder.py
-    │   ├── prompt_template.py        
-    │   ├── cloudinary_uploader.py
-    │   └── supabase_client.py
-    └── retrieval/
-        └── retriever.py
+![Architecture](assets/demo/demo_architecture.png)
 
 #結構說明
 
