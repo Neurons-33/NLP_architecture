@@ -4,6 +4,7 @@ import os
 import sys
 import re
 import random
+import time
 
 import streamlit as st
 from dotenv import load_dotenv
@@ -253,6 +254,12 @@ def get_retriever():
         os.makedirs(KNOWLEDGE_DIR, exist_ok=True)
     return load_retriever(KNOWLEDGE_DIR)
 
+QUERY_COOLDOWN_SECONDS = 3
+SIMILARITY_THRESHOLD = 0.35
+MIN_CONTEXT_LENGTH = 50
+MIN_RESULT_LENGTH = 30
+MAX_QUESTION_LENGTH = 200
+
 # =========================
 # State Management
 # =========================
@@ -262,7 +269,7 @@ if "last_png" not in st.session_state: st.session_state.last_png = None
 if "last_image_url" not in st.session_state: st.session_state.last_image_url = ""
 if "card_history" not in st.session_state: st.session_state.card_history = []
 if "last_public_id" not in st.session_state: st.session_state.last_public_id = ""
-
+if "last_query_time" not in st.session_state: st.session_state.last_query_time = 0.0
 
 # =========================
 # Streamlit Page Config
@@ -276,12 +283,54 @@ st.title("ML Concept Engine")
 retriever_state = get_retriever()
 question = st.text_input("Ask ML questions and generate visual explanation cards")
 
-if st.button("Enter") and question:
+if st.button("Enter"):
     try:
+        question = question.strip()
+
+        # 1) 基本輸入防呆
+        if len(question) < 2:
+            st.warning("請輸入至少 2 個字再查詢。")
+            st.stop()
+
+        if len(question) > MAX_QUESTION_LENGTH:
+            st.warning(f"問題太長，請控制在 {MAX_QUESTION_LENGTH} 字內。")
+            st.stop()
+
+        # 2) 查詢冷卻時間
+        now = time.time()
+        if now - st.session_state.last_query_time < QUERY_COOLDOWN_SECONDS:
+            st.warning(f"請稍等 {QUERY_COOLDOWN_SECONDS} 秒後再查詢。")
+            st.stop()
+
         with st.spinner("思考與檢索中..."):
             results = search_chunks(question, retriever_state, top_k=3)
+
+            # 3) 完全沒結果
+            if not results:
+                st.warning("找不到相關知識內容，請換個關鍵字再試一次。")
+                st.stop()
+
+            # 4) 相似度 threshold
+            best_score = results[0]["score"]
+            if best_score < SIMILARITY_THRESHOLD:
+                st.warning(
+                    f"找不到足夠相關的內容（最高相似度 {best_score:.3f} < {SIMILARITY_THRESHOLD:.2f}），請換個更明確的問題。"
+                )
+                st.stop()
+
             context = build_retrieved_context(results)
+
+            # 5) context 太短
+            if not context or len(context.strip()) < MIN_CONTEXT_LENGTH:
+                st.warning("檢索內容不足，暫時無法生成知識卡。")
+                st.stop()
+
             result = generate_report(context=context, question=question)
+
+            # 6) LLM 輸出太短
+            if not result or len(result.strip()) < MIN_RESULT_LENGTH:
+                st.warning("模型未能生成有效內容，請重新提問。")
+                st.stop()
 
             source_list = [os.path.basename(r["source"]) for r in results]
 
@@ -304,13 +353,17 @@ if st.button("Enter") and question:
             st.session_state.last_png = png_buffer.getvalue()
             st.session_state.last_image_url = image_url
             st.session_state.last_public_id = public_id
+
+            # 成功完成後才更新最後查詢時間
+            st.session_state.last_query_time = now
+
             insert_card(
                 question=question,
                 answer=result,
                 image_url=image_url,
                 public_id=public_id
             )
-            # join card history
+
             st.session_state.card_history.insert(0, image_url)
             st.session_state.card_history = st.session_state.card_history[:5]
 
